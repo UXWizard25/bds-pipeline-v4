@@ -34,7 +34,7 @@
     "build:legacy": "npm run build:tokens",
     "watch": "nodemon --watch src/design-tokens --ext json --exec npm run build",
     "clean": "rm -rf dist tokens",
-    "prepublishOnly": "npm run build"
+    "_prepublishOnly_disabled": "npm run build"
   },
   "repository": {
     "type": "git",
