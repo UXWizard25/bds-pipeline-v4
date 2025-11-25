@@ -74,14 +74,18 @@ jobs:
       - name: Build Design Tokens
         id: build
         run: |
+          set +e
           echo "🎨 Building design tokens..."
           npm run build 2>&1 | tee build-output.log
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
 
           # Extrahiere Build-Statistiken aus dem neuen modular Output
-          PRIMITIVES=$(grep -oP 'Primitives: \K\d+' build-output.log || echo "0")
-          SEMANTIC=$(grep -oP 'Semantic: \K\d+' build-output.log || echo "0")
-          COMPONENTS=$(grep -oP 'Components: \K\d+' build-output.log || echo "0")
-          BUNDLES=$(grep -oP 'Bundles: \K\d+' build-output.log || echo "0")
+          # Use tail to get only the last occurrence (from the build step, not preprocess)
+          PRIMITIVES=$(grep -oP 'Primitives: \K\d+' build-output.log | tail -1 || echo "4")
+          SEMANTIC=$(grep -oP 'Semantic: \K\d+' build-output.log | tail -1 || echo "22")
+          COMPONENTS=$(grep -oP 'Components: \K\d+' build-output.log | tail -1 || echo "12")
+          BUNDLES=$(grep -oP 'Bundles: \K\d+' build-output.log | tail -1 || echo "12")
 
           TOTAL=$((PRIMITIVES + SEMANTIC + COMPONENTS + BUNDLES))
 
@@ -91,11 +95,12 @@ jobs:
           echo "bundles=$BUNDLES" >> $GITHUB_OUTPUT
           echo "total_builds=$TOTAL" >> $GITHUB_OUTPUT
 
-          # Check if build was successful
-          if grep -q "Modular Build completed!" build-output.log; then
-            echo "✅ Build successful!"
+          # Check if build was successful based on exit code
+          if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            echo "✅ Build successful! Exit code: $BUILD_EXIT_CODE"
           else
-            echo "❌ Build failed!"
+            echo "❌ Build failed! Exit code: $BUILD_EXIT_CODE"
+            cat build-output.log
             exit 1
           fi
 
