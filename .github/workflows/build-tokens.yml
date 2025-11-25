@@ -70,27 +70,32 @@ jobs:
           echo "📦 Installing dependencies..."
           npm ci
 
-      # 5. Token-Verarbeitung durchführen
-      - name: Preprocess Figma Tokens
-        run: |
-          echo "⚙️ Preprocessing Figma tokens..."
-          npm run preprocess
-
-      - name: Build Tokens with Style Dictionary
+      # 5. Token-Verarbeitung durchführen (Modular Build)
+      - name: Build Design Tokens
         id: build
         run: |
-          echo "🎨 Building tokens with Style Dictionary..."
-          npm run build:tokens 2>&1 | tee build-output.log
+          echo "🎨 Building design tokens..."
+          npm run build 2>&1 | tee build-output.log
 
-          # Extrahiere Build-Statistiken
-          SUCCESSFUL_BUILDS=$(grep -oP 'Builds erfolgreich: \K\d+' build-output.log || echo "0")
-          TOTAL_BUILDS=$(grep -oP 'Builds erfolgreich: \d+/\K\d+' build-output.log || echo "0")
+          # Extrahiere Build-Statistiken aus dem neuen modular Output
+          PRIMITIVES=$(grep -oP 'Primitives: \K\d+' build-output.log || echo "0")
+          SEMANTIC=$(grep -oP 'Semantic: \K\d+' build-output.log || echo "0")
+          COMPONENTS=$(grep -oP 'Components: \K\d+' build-output.log || echo "0")
+          BUNDLES=$(grep -oP 'Bundles: \K\d+' build-output.log || echo "0")
 
-          echo "successful_builds=$SUCCESSFUL_BUILDS" >> $GITHUB_OUTPUT
-          echo "total_builds=$TOTAL_BUILDS" >> $GITHUB_OUTPUT
+          TOTAL=$((PRIMITIVES + SEMANTIC + COMPONENTS + BUNDLES))
 
-          if [ "$SUCCESSFUL_BUILDS" -eq "0" ]; then
-            echo "❌ No successful builds!"
+          echo "primitives=$PRIMITIVES" >> $GITHUB_OUTPUT
+          echo "semantic=$SEMANTIC" >> $GITHUB_OUTPUT
+          echo "components=$COMPONENTS" >> $GITHUB_OUTPUT
+          echo "bundles=$BUNDLES" >> $GITHUB_OUTPUT
+          echo "total_builds=$TOTAL" >> $GITHUB_OUTPUT
+
+          # Check if build was successful
+          if grep -q "Modular Build completed!" build-output.log; then
+            echo "✅ Build successful!"
+          else
+            echo "❌ Build failed!"
             exit 1
           fi
 
@@ -111,28 +116,38 @@ jobs:
           echo "## 🎨 Design Token Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
-          echo "**Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Builds:** ${{ steps.build.outputs.total_builds }}" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          echo "### 📊 Build Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Layer | Files |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Primitives | ${{ steps.build.outputs.primitives }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Semantic | ${{ steps.build.outputs.semantic }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Components | ${{ steps.build.outputs.components }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bundles | ${{ steps.build.outputs.bundles }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           echo "### 📁 Generated Files" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Base Layer" >> $GITHUB_STEP_SUMMARY
+          echo "#### Shared Primitives" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          ls -1 dist/base/*.css 2>/dev/null | head -5 || echo "No files generated"
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "#### Mapping Layer" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          ls -1 dist/mapping/*.css 2>/dev/null | head -5 || echo "No files generated"
+          ls -1 dist/shared/primitives/*.css 2>/dev/null | head -5 || echo "No files generated"
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "#### Density Layer" >> $GITHUB_STEP_SUMMARY
+          echo "#### Brand Core (BILD)" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          ls -1 dist/density/*.css 2>/dev/null | head -5 || echo "No files generated"
+          ls -1 dist/bild/core/*.css 2>/dev/null | head -5 || echo "No files generated"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Brand Components (BILD)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -1 dist/bild/components/*.css 2>/dev/null | head -5 || echo "No files generated"
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -140,8 +155,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Total Files Generated:** $(find dist -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
           echo "- **CSS Files:** $(find dist -name '*.css' | wc -l)" >> $GITHUB_STEP_SUMMARY
-          echo "- **SCSS Files:** $(find dist -name '*.scss' | wc -l)" >> $GITHUB_STEP_SUMMARY
-          echo "- **JavaScript Files:** $(find dist -name '*.js' | wc -l)" >> $GITHUB_STEP_SUMMARY
           echo "- **JSON Files:** $(find dist -name '*.json' | wc -l)" >> $GITHUB_STEP_SUMMARY
 
       # 8. Comment PR with Artifacts (if this is a PR)
@@ -155,37 +168,34 @@ jobs:
             // Get file statistics
             const totalFiles = parseInt(require('child_process').execSync('find dist -type f 2>/dev/null | wc -l').toString().trim());
             const cssFiles = parseInt(require('child_process').execSync('find dist -name "*.css" 2>/dev/null | wc -l').toString().trim());
-            const scssFiles = parseInt(require('child_process').execSync('find dist -name "*.scss" 2>/dev/null | wc -l').toString().trim());
-            const jsFiles = parseInt(require('child_process').execSync('find dist -name "*.js" 2>/dev/null | wc -l').toString().trim());
             const jsonFiles = parseInt(require('child_process').execSync('find dist -name "*.json" 2>/dev/null | wc -l').toString().trim());
 
             const comment = `## 🎨 Design Tokens Build erfolgreich!
 
             **Build Statistiken:**
-            - ✅ Successful Builds: ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}
-            - 📦 Commit: \`${{ github.sha }}\`
+            - 📦 Primitives: ${{ steps.build.outputs.primitives }} files
+            - 🎨 Semantic: ${{ steps.build.outputs.semantic }} files
+            - 🧩 Components: ${{ steps.build.outputs.components }} files
+            - 📁 Bundles: ${{ steps.build.outputs.bundles }} files
+            - 🔢 Total: ${{ steps.build.outputs.total_builds }} files
+            - 📍 Commit: \`${{ github.sha }}\`
             - 🌲 Branch: \`${{ github.head_ref }}\`
 
             ### 📥 Review der generierten Files:
 
             [⬇️ **Download Build Artifacts**](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-            **Enthalten:**
-            - \`dist/css/\` - CSS Custom Properties
-            - \`dist/scss/\` - SCSS Variables
-            - \`dist/js/\` - JavaScript ES6
-            - \`dist/json/\` - JSON Data
-            - \`dist/ios/\` - Swift Classes
-            - \`dist/android/\` - Android XML
-            - \`dist/flutter/\` - Flutter Dart
+            **Modular Structure:**
+            - \`dist/shared/primitives/\` - Base design tokens (no var() references)
+            - \`dist/{brand}/core/\` - Semantic tokens (var() refs to primitives)
+            - \`dist/{brand}/components/\` - Component tokens (var() refs to semantic)
+            - \`dist/{brand}/bundles/\` - Pre-built bundles (complete, essentials)
 
             <details>
             <summary>📊 Datei-Statistiken</summary>
 
             - **Total Files:** ${totalFiles}
             - **CSS Files:** ${cssFiles}
-            - **SCSS Files:** ${scssFiles}
-            - **JS Files:** ${jsFiles}
             - **JSON Files:** ${jsonFiles}
 
             </details>
