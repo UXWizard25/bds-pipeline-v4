@@ -25,6 +25,7 @@ const BRANDS = ['bild', 'sportbild', 'advertorial'];
 const BREAKPOINTS = ['mobile', 'tablet', 'desktop'];
 const COLOR_MODES = ['light', 'dark'];
 const DENSITY_MODES = ['compact', 'default', 'spacious'];
+const PLATFORMS = ['css', 'scss', 'js', 'json', 'ios', 'android', 'flutter'];
 
 /**
  * Cleans the dist directory
@@ -249,9 +250,14 @@ async function buildPrimitives() {
     const sourcePath = path.join(primitivesDir, file);
     const tokens = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
 
+    // CSS
     const cssContent = generatePrimitivesCSS(tokens, baseName);
     fs.writeFileSync(path.join(outputDir, `${baseName}.css`), cssContent);
-    console.log(`  ✅ ${baseName}.css`);
+
+    // All other platforms
+    writeAllPlatformFormats(tokens, path.join(DIST_DIR, 'shared', 'primitives'), baseName, 'primitives');
+
+    console.log(`  ✅ ${baseName} (css, scss, js, json, ios, android, flutter)`);
     successful++;
   }
 
@@ -357,9 +363,14 @@ async function buildSemanticTokens() {
         imports.push('../../shared/primitives/sizing.css');
       }
 
+      // CSS
       const cssContent = generateSemanticCSS(tokens, imports, brand, baseName);
       fs.writeFileSync(path.join(coreDir, `${baseName}.css`), cssContent);
-      console.log(`  ✅ ${brand}/${baseName}.css`);
+
+      // All other platforms
+      writeAllPlatformFormats(tokens, path.join(DIST_DIR, brand, 'core'), baseName, 'semantic', brand);
+
+      console.log(`  ✅ ${brand}/${baseName} (7 platforms)`);
       successful++;
     }
   }
@@ -432,6 +443,319 @@ function flattenTokensToCSS(obj, prefix) {
   return css;
 }
 
+// ============================================
+// MULTI-PLATFORM FORMAT GENERATORS
+// ============================================
+
+/**
+ * Generate SCSS variables from tokens
+ */
+function generateSCSS(tokens, fileName, layer, brand = null) {
+  let output = `// BILD Design System - Modular Tokens\n`;
+  output += `// Do not edit directly, this file was auto-generated.\n`;
+  output += `// Layer: ${layer}${brand ? `, Brand: ${brand}` : ''}\n\n`;
+  output += flattenTokensToSCSS(tokens, '');
+  return output;
+}
+
+function flattenTokensToSCSS(obj, prefix) {
+  let scss = '';
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}-${key}` : key;
+    const varName = currentPath.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        const tokenValue = value.$value;
+        let scssValue;
+        if (typeof tokenValue === 'string' && tokenValue.startsWith('{') && tokenValue.endsWith('}')) {
+          const refPath = tokenValue.slice(1, -1);
+          const refVarName = refPath.replace(/\./g, '-').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+          scssValue = `$${refVarName}`;
+        } else {
+          scssValue = tokenValue;
+        }
+        scss += `$${varName}: ${scssValue};\n`;
+      } else {
+        scss += flattenTokensToSCSS(value, currentPath);
+      }
+    }
+  });
+  return scss;
+}
+
+/**
+ * Generate JavaScript/TypeScript module from tokens
+ */
+function generateJS(tokens, fileName, layer, brand = null) {
+  let output = `/**\n * BILD Design System - Modular Tokens\n`;
+  output += ` * Do not edit directly, this file was auto-generated.\n`;
+  output += ` * Layer: ${layer}${brand ? `, Brand: ${brand}` : ''}\n */\n\n`;
+
+  const flatTokens = flattenTokensToJS(tokens, '');
+  output += `export const tokens = ${JSON.stringify(flatTokens, null, 2)};\n\n`;
+  output += `export default tokens;\n`;
+  return output;
+}
+
+function flattenTokensToJS(obj, prefix) {
+  const result = {};
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}-${key}` : key;
+    const varName = currentPath.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_');
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        result[varName] = value.$value;
+      } else {
+        Object.assign(result, flattenTokensToJS(value, currentPath));
+      }
+    }
+  });
+  return result;
+}
+
+/**
+ * Generate JSON export from tokens
+ */
+function generateJSON(tokens, fileName, layer, brand = null) {
+  const flatTokens = flattenTokensToJSON(tokens, '');
+  return JSON.stringify({
+    metadata: {
+      generated: new Date().toISOString(),
+      layer,
+      brand,
+      fileName
+    },
+    tokens: flatTokens
+  }, null, 2);
+}
+
+function flattenTokensToJSON(obj, prefix) {
+  const result = {};
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}.${key}` : key;
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        result[currentPath] = {
+          value: value.$value,
+          type: value.$type || 'unknown',
+          description: value.$description || null
+        };
+      } else {
+        Object.assign(result, flattenTokensToJSON(value, currentPath));
+      }
+    }
+  });
+  return result;
+}
+
+/**
+ * Generate iOS Swift code from tokens
+ */
+function generateSwift(tokens, fileName, layer, brand = null) {
+  const className = toPascalCase(fileName);
+  let output = `// BILD Design System - Modular Tokens\n`;
+  output += `// Do not edit directly, this file was auto-generated.\n`;
+  output += `// Layer: ${layer}${brand ? `, Brand: ${brand}` : ''}\n\n`;
+  output += `import UIKit\n\n`;
+  output += `public struct ${className} {\n`;
+  output += flattenTokensToSwift(tokens, '');
+  output += `}\n`;
+  return output;
+}
+
+function flattenTokensToSwift(obj, prefix) {
+  let swift = '';
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}${toPascalCase(key)}` : toCamelCase(key);
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        const tokenValue = value.$value;
+        const swiftValue = formatSwiftValue(tokenValue, value.$type);
+        swift += `    public static let ${currentPath} = ${swiftValue}\n`;
+      } else {
+        swift += flattenTokensToSwift(value, currentPath);
+      }
+    }
+  });
+  return swift;
+}
+
+function formatSwiftValue(value, type) {
+  if (typeof value === 'string') {
+    if (value.startsWith('#')) {
+      return `UIColor(hex: "${value}")`;
+    }
+    if (value.endsWith('px')) {
+      return `CGFloat(${parseFloat(value)})`;
+    }
+    return `"${value}"`;
+  }
+  if (typeof value === 'number') {
+    return `CGFloat(${value})`;
+  }
+  return `"${value}"`;
+}
+
+/**
+ * Generate Android XML resources from tokens
+ */
+function generateAndroidXML(tokens, fileName, layer, brand = null) {
+  let output = `<?xml version="1.0" encoding="utf-8"?>\n`;
+  output += `<!-- BILD Design System - Modular Tokens -->\n`;
+  output += `<!-- Do not edit directly, this file was auto-generated. -->\n`;
+  output += `<!-- Layer: ${layer}${brand ? `, Brand: ${brand}` : ''} -->\n`;
+  output += `<resources>\n`;
+  output += flattenTokensToAndroid(tokens, '');
+  output += `</resources>\n`;
+  return output;
+}
+
+function flattenTokensToAndroid(obj, prefix) {
+  let xml = '';
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}_${key}` : key;
+    const resourceName = currentPath.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_');
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        const tokenValue = value.$value;
+        const { resourceType, formattedValue } = formatAndroidValue(tokenValue, value.$type);
+        xml += `    <${resourceType} name="${resourceName}">${formattedValue}</${resourceType}>\n`;
+      } else {
+        xml += flattenTokensToAndroid(value, currentPath);
+      }
+    }
+  });
+  return xml;
+}
+
+function formatAndroidValue(value, type) {
+  if (typeof value === 'string') {
+    if (value.startsWith('#')) {
+      return { resourceType: 'color', formattedValue: value };
+    }
+    if (value.endsWith('px')) {
+      return { resourceType: 'dimen', formattedValue: value.replace('px', 'dp') };
+    }
+    return { resourceType: 'string', formattedValue: value };
+  }
+  if (typeof value === 'number') {
+    return { resourceType: 'dimen', formattedValue: `${value}dp` };
+  }
+  return { resourceType: 'string', formattedValue: String(value) };
+}
+
+/**
+ * Generate Flutter Dart code from tokens
+ */
+function generateDart(tokens, fileName, layer, brand = null) {
+  const className = toPascalCase(fileName);
+  let output = `// BILD Design System - Modular Tokens\n`;
+  output += `// Do not edit directly, this file was auto-generated.\n`;
+  output += `// Layer: ${layer}${brand ? `, Brand: ${brand}` : ''}\n\n`;
+  output += `import 'package:flutter/material.dart';\n\n`;
+  output += `class ${className} {\n`;
+  output += `  ${className}._();\n\n`;
+  output += flattenTokensToDart(tokens, '');
+  output += `}\n`;
+  return output;
+}
+
+function flattenTokensToDart(obj, prefix) {
+  let dart = '';
+  Object.entries(obj).forEach(([key, value]) => {
+    const currentPath = prefix ? `${prefix}${toPascalCase(key)}` : toCamelCase(key);
+
+    if (value && typeof value === 'object') {
+      if (value.$value !== undefined) {
+        const tokenValue = value.$value;
+        const dartValue = formatDartValue(tokenValue, value.$type);
+        dart += `  static const ${dartValue.type} ${currentPath} = ${dartValue.value};\n`;
+      } else {
+        dart += flattenTokensToDart(value, currentPath);
+      }
+    }
+  });
+  return dart;
+}
+
+function formatDartValue(value, type) {
+  if (typeof value === 'string') {
+    if (value.startsWith('#')) {
+      const hex = value.replace('#', '');
+      const alpha = hex.length === 6 ? 'FF' : hex.slice(6, 8);
+      const rgb = hex.length === 6 ? hex : hex.slice(0, 6);
+      return { type: 'Color', value: `Color(0x${alpha}${rgb})` };
+    }
+    if (value.endsWith('px')) {
+      return { type: 'double', value: parseFloat(value).toString() };
+    }
+    return { type: 'String', value: `'${value}'` };
+  }
+  if (typeof value === 'number') {
+    return { type: 'double', value: `${value}.0` };
+  }
+  return { type: 'String', value: `'${value}'` };
+}
+
+// Helper functions for case conversion
+function toPascalCase(str) {
+  return str.replace(/[-_](.)/g, (_, c) => c.toUpperCase())
+            .replace(/^(.)/, (_, c) => c.toUpperCase())
+            .replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function toCamelCase(str) {
+  return str.replace(/[-_](.)/g, (_, c) => c.toUpperCase())
+            .replace(/^(.)/, (_, c) => c.toLowerCase())
+            .replace(/[^a-zA-Z0-9]/g, '');
+}
+
+/**
+ * Write token file in all platform formats
+ */
+function writeAllPlatformFormats(tokens, outputDir, baseName, layer, brand = null) {
+  // CSS (already handled separately with @import statements)
+
+  // SCSS
+  const scssDir = path.join(outputDir, 'scss');
+  fs.mkdirSync(scssDir, { recursive: true });
+  fs.writeFileSync(path.join(scssDir, `${baseName}.scss`), generateSCSS(tokens, baseName, layer, brand));
+
+  // JavaScript
+  const jsDir = path.join(outputDir, 'js');
+  fs.mkdirSync(jsDir, { recursive: true });
+  fs.writeFileSync(path.join(jsDir, `${baseName}.js`), generateJS(tokens, baseName, layer, brand));
+
+  // JSON
+  const jsonDir = path.join(outputDir, 'json');
+  fs.mkdirSync(jsonDir, { recursive: true });
+  fs.writeFileSync(path.join(jsonDir, `${baseName}.json`), generateJSON(tokens, baseName, layer, brand));
+
+  // iOS Swift
+  const iosDir = path.join(outputDir, 'ios');
+  fs.mkdirSync(iosDir, { recursive: true });
+  fs.writeFileSync(path.join(iosDir, `${toPascalCase(baseName)}.swift`), generateSwift(tokens, baseName, layer, brand));
+
+  // Android XML
+  const androidDir = path.join(outputDir, 'android');
+  fs.mkdirSync(androidDir, { recursive: true });
+  fs.writeFileSync(path.join(androidDir, `${baseName}.xml`), generateAndroidXML(tokens, baseName, layer, brand));
+
+  // Flutter Dart
+  const flutterDir = path.join(outputDir, 'flutter');
+  fs.mkdirSync(flutterDir, { recursive: true });
+  fs.writeFileSync(path.join(flutterDir, `${baseName}.dart`), generateDart(tokens, baseName, layer, brand));
+}
+
+// ============================================
+// END MULTI-PLATFORM FORMAT GENERATORS
+// ============================================
+
 /**
  * Create core complete bundle for a brand
  */
@@ -485,9 +809,14 @@ async function buildComponentTokens() {
         '../../shared/primitives/spacing.css'
       ];
 
+      // CSS
       const cssContent = generateComponentCSS(tokens, imports, brand, baseName);
       fs.writeFileSync(path.join(componentsDir, `${baseName}.css`), cssContent);
-      console.log(`  ✅ ${brand}/${baseName}.css`);
+
+      // All other platforms
+      writeAllPlatformFormats(tokens, path.join(DIST_DIR, brand, 'components'), baseName, 'components', brand);
+
+      console.log(`  ✅ ${brand}/${baseName} (7 platforms)`);
       successful++;
     }
 
@@ -640,21 +969,36 @@ function createManifest(stats) {
     version: '0.1.0',
     architecture: 'modular',
     layers: ['primitives', 'semantic', 'components'],
+    platforms: PLATFORMS,
     statistics: stats,
     structure: {
       brands: BRANDS,
       breakpoints: BREAKPOINTS,
       colorModes: COLOR_MODES,
+      densityModes: DENSITY_MODES,
       outputPaths: {
         shared: 'shared/',
         brands: '{brand}/',
-        bundles: '{brand}/bundles/'
+        bundles: '{brand}/bundles/',
+        platforms: {
+          css: '{layer}/*.css',
+          scss: '{layer}/scss/*.scss',
+          js: '{layer}/js/*.js',
+          json: '{layer}/json/*.json',
+          ios: '{layer}/ios/*.swift',
+          android: '{layer}/android/*.xml',
+          flutter: '{layer}/flutter/*.dart'
+        }
       }
     },
     usage: {
-      complete: "import '@marioschmidt/design-tokens-modular/{brand}/bundles/complete-light.css'",
-      components: "import '@marioschmidt/design-tokens-modular/{brand}/components/button.css'",
-      primitives: "import '@marioschmidt/design-tokens-modular/shared/primitives/colors.css'"
+      css: "import '@marioschmidt/design-tokens-modular/{brand}/bundles/complete-light.css'",
+      scss: "@import '@marioschmidt/design-tokens-modular/{brand}/core/scss/colors-light.scss'",
+      js: "import tokens from '@marioschmidt/design-tokens-modular/{brand}/core/js/colors-light.js'",
+      json: "const tokens = require('@marioschmidt/design-tokens-modular/{brand}/core/json/colors-light.json')",
+      ios: "// Add Colors.swift to your Xcode project",
+      android: "<!-- Add colors.xml to res/values/ -->",
+      flutter: "import 'package:design_tokens/colors.dart'"
     }
   };
 
@@ -675,7 +1019,7 @@ async function main() {
   console.log('   BILD Design System - Modular Build');
   console.log('   ============================================\n');
   console.log('   Architecture: Primitives → Semantic → Components');
-  console.log('   Output: CSS Variable References (var(--token))');
+  console.log('   Platforms: CSS, SCSS, JS, JSON, iOS, Android, Flutter');
   console.log('');
 
   // Clean dist
@@ -722,14 +1066,17 @@ async function main() {
 
   console.log(`📁 Structure:`);
   console.log(`   dist/`);
-  console.log(`   ├── shared/`);
-  console.log(`   │   ├── primitives/           (no var() - resolved values)`);
-  console.log(`   │   └── primitives-bundle.css`);
-  console.log(`   ├── {brand}/`);
-  console.log(`   │   ├── core/                 (var() references to primitives)`);
-  console.log(`   │   ├── components/           (var() references to semantic)`);
-  console.log(`   │   ├── bundles/              (complete, essentials)`);
-  console.log(`   │   └── index.css`);
+  console.log(`   ├── shared/primitives/`);
+  console.log(`   │   ├── *.css                 (CSS Variables)`);
+  console.log(`   │   ├── scss/*.scss           (SCSS Variables)`);
+  console.log(`   │   ├── js/*.js               (ES Modules)`);
+  console.log(`   │   ├── json/*.json           (JSON Export)`);
+  console.log(`   │   ├── ios/*.swift           (Swift Structs)`);
+  console.log(`   │   ├── android/*.xml         (Android Resources)`);
+  console.log(`   │   └── flutter/*.dart        (Dart Classes)`);
+  console.log(`   ├── {brand}/core/             (Semantic tokens - 7 platforms)`);
+  console.log(`   ├── {brand}/components/       (Component tokens - 7 platforms)`);
+  console.log(`   ├── {brand}/bundles/          (CSS bundles only)`);
   console.log(`   └── manifest.json`);
   console.log('');
 
