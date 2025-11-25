@@ -13,6 +13,7 @@ on:
       - 'scripts/**'
       - 'build-config/**'
       - 'package.json'
+      - '.github/workflows/**'
 
   # Manueller Trigger über GitHub UI
   workflow_dispatch:
