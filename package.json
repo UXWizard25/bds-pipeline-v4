@@ -1,20 +1,23 @@
 {
-  "name": "@marioschmidt/design-system-tokens",
-  "version": "1.0.0",
-  "description": "BILD Design System Token Pipeline with Style Dictionary - Multi-brand design tokens for BILD, SportBILD, and Advertorial",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "name": "@marioschmidt/design-tokens-modular",
+  "version": "0.1.0",
+  "description": "BILD Design System - Modular Token Architecture with CSS Variable References",
+  "main": "dist/bild/index.css",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
-    },
-    "./css/*": "./dist/css/*",
-    "./scss/*": "./dist/scss/*",
-    "./js/*": "./dist/js/*",
-    "./json/*": "./dist/json/*",
+    "./bild": "./dist/bild/index.css",
+    "./bild/bundles/*": "./dist/bild/bundles/*",
+    "./bild/components/*": "./dist/bild/components/*",
+    "./bild/core/*": "./dist/bild/core/*",
+    "./sportbild": "./dist/sportbild/index.css",
+    "./sportbild/bundles/*": "./dist/sportbild/bundles/*",
+    "./sportbild/components/*": "./dist/sportbild/components/*",
+    "./sportbild/core/*": "./dist/sportbild/core/*",
+    "./advertorial": "./dist/advertorial/index.css",
+    "./advertorial/bundles/*": "./dist/advertorial/bundles/*",
+    "./advertorial/components/*": "./dist/advertorial/components/*",
+    "./advertorial/core/*": "./dist/advertorial/core/*",
+    "./shared/primitives/*": "./dist/shared/primitives/*",
+    "./shared/primitives-bundle.css": "./dist/shared/primitives-bundle.css",
     "./package.json": "./package.json"
   },
   "files": [
@@ -24,20 +27,23 @@
   ],
   "scripts": {
     "preprocess": "node scripts/preprocess-plugin-tokens.js",
+    "preprocess:modular": "node scripts/preprocess-modular-tokens.js",
     "build:tokens": "npm run preprocess && node scripts/build-tokens-v2.js",
-    "build": "npm run build:tokens",
-    "watch": "nodemon --watch src/design-tokens --ext json --exec npm run build:tokens",
+    "build:modular": "npm run preprocess:modular && node scripts/build-tokens-modular.js",
+    "build": "npm run build:modular",
+    "build:legacy": "npm run build:tokens",
+    "watch": "nodemon --watch src/design-tokens --ext json --exec npm run build",
     "clean": "rm -rf dist tokens",
     "prepublishOnly": "npm run build"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/UXWizard25/vv-token-test-v3.git"
+    "url": "git+https://github.com/UXWizard25/bds-pipeline-v4.git"
   },
   "bugs": {
-    "url": "https://github.com/UXWizard25/vv-token-test-v3/issues"
+    "url": "https://github.com/UXWizard25/bds-pipeline-v4/issues"
   },
-  "homepage": "https://github.com/UXWizard25/vv-token-test-v3#readme",
+  "homepage": "https://github.com/UXWizard25/bds-pipeline-v4#readme",
   "keywords": [
     "design-tokens",
     "style-dictionary",
