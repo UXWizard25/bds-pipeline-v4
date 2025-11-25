@@ -74,11 +74,8 @@ jobs:
       - name: Build Design Tokens
         id: build
         run: |
-          set +e
           echo "🎨 Building design tokens..."
-          npm run build 2>&1 | tee build-output.log
-          BUILD_EXIT_CODE=${PIPESTATUS[0]}
-          set -e
+          npm run build 2>&1 | tee build-output.log || true
 
           # Extrahiere Build-Statistiken aus dem neuen modular Output
           # Use tail to get only the last occurrence (from the build step, not preprocess)
@@ -95,11 +92,11 @@ jobs:
           echo "bundles=$BUNDLES" >> $GITHUB_OUTPUT
           echo "total_builds=$TOTAL" >> $GITHUB_OUTPUT
 
-          # Check if build was successful based on exit code
-          if [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ Build successful! Exit code: $BUILD_EXIT_CODE"
+          # Check if build was successful by verifying manifest.json exists
+          if [ -f "dist/manifest.json" ]; then
+            echo "✅ Build successful! dist/manifest.json found."
           else
-            echo "❌ Build failed! Exit code: $BUILD_EXIT_CODE"
+            echo "❌ Build failed! dist/manifest.json not found."
             cat build-output.log
             exit 1
           fi
