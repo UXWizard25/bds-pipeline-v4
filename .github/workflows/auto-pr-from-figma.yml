@@ -1,0 +1,228 @@
+name: Auto PR from Figma Tokens
+
+# Trigger: Wenn Variable Visualizer Plugin zu figma-tokens Branch pusht
+on:
+  push:
+    branches:
+      - figma-tokens
+    paths:
+      - 'src/design-tokens/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-create-pr:
+    name: Build Tokens & Create PR
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: figma-tokens
+          fetch-depth: 0
+
+      # 2. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Dependencies installieren
+      - name: Install Dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+
+      # 4. Token Build durchführen
+      - name: Build Design Tokens
+        id: build
+        run: |
+          echo "🎨 Building design tokens..."
+          npm run build 2>&1 | tee build-output.log
+
+          # Extrahiere Build-Statistiken
+          SUCCESSFUL_BUILDS=$(grep -oP 'Builds erfolgreich: \K\d+' build-output.log || echo "0")
+          TOTAL_BUILDS=$(grep -oP 'Builds erfolgreich: \d+/\K\d+' build-output.log || echo "0")
+
+          echo "successful_builds=$SUCCESSFUL_BUILDS" >> $GITHUB_OUTPUT
+          echo "total_builds=$TOTAL_BUILDS" >> $GITHUB_OUTPUT
+
+          if [ "$SUCCESSFUL_BUILDS" -eq "0" ]; then
+            echo "❌ Build failed!"
+            exit 1
+          fi
+
+          echo "✅ Build successful: $SUCCESSFUL_BUILDS/$TOTAL_BUILDS"
+
+      # 5. Upload Build Artifacts
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: figma-tokens-${{ github.sha }}
+          path: |
+            dist/
+            tokens/
+            build-output.log
+          retention-days: 30
+
+      # 6. Extrahiere geänderte Token-Dateien
+      - name: Get Changed Token Files
+        id: changes
+        run: |
+          # Vergleiche mit main Branch
+          git fetch origin main
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD -- src/design-tokens/ | head -10)
+
+          # Formatiere für PR Body
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Zähle Änderungen
+          CHANGE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
+          echo "change_count=$CHANGE_COUNT" >> $GITHUB_OUTPUT
+
+      # 7. Prüfe ob PR bereits existiert
+      - name: Check for Existing PR
+        id: check_pr
+        run: |
+          PR_NUMBER=$(gh pr list --base main --head figma-tokens --json number --jq '.[0].number')
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No existing PR found"
+          else
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "Existing PR found: #$PR_NUMBER"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 8. Erstelle oder Update Pull Request
+      - name: Create or Update Pull Request
+        run: |
+          if [ "${{ steps.check_pr.outputs.exists }}" == "true" ]; then
+            echo "📝 Updating existing PR #${{ steps.check_pr.outputs.pr_number }}..."
+
+            gh pr comment ${{ steps.check_pr.outputs.pr_number }} --body "$(cat <<'EOF'
+          ## 🔄 Tokens Updated
+
+          **Build Status:** ✅ Success
+          **Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}
+          **Files Changed:** ${{ steps.changes.outputs.change_count }}
+
+          <details>
+          <summary>Changed Files</summary>
+
+          \`\`\`
+          ${{ steps.changes.outputs.changed_files }}
+          \`\`\`
+          </details>
+
+          **Commit:** \`${{ github.sha }}\`
+          **Updated:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          EOF
+          )"
+          else
+            echo "📝 Creating new Pull Request..."
+
+            gh pr create \
+              --base main \
+              --head figma-tokens \
+              --title "🎨 Update design tokens from Figma" \
+              --body "$(cat <<'EOF'
+          ## 🎨 Design Token Update
+
+          This PR contains updated design tokens from Figma Variable Visualizer.
+
+          ### ✅ Build Results
+
+          - **Build Status:** Success
+          - **Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}
+          - **Warnings:** 0
+
+          ### 📥 Review Generated Files
+
+          [⬇️ **Download Build Artifacts**](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          The generated `dist/` files are available as build artifacts (30 days retention) for review.
+
+          ### 📝 Changed Files
+
+          **Files Changed:** ${{ steps.changes.outputs.change_count }}
+
+          <details>
+          <summary>View Changed Files</summary>
+
+          \`\`\`
+          ${{ steps.changes.outputs.changed_files }}
+          \`\`\`
+          </details>
+
+          ### 🚀 What Happens After Merge?
+
+          When you merge this PR:
+          1. ✅ Tokens will be rebuilt
+          2. ✅ Package version will be bumped (patch)
+          3. ✅ Package will be published to npm
+          4. ✅ GitHub Release will be created
+
+          ### 📊 Build Statistics
+
+          - **Total Files Generated:** $(find dist -type f 2>/dev/null | wc -l)
+          - **CSS Files:** $(find dist -name '*.css' 2>/dev/null | wc -l)
+          - **SCSS Files:** $(find dist -name '*.scss' 2>/dev/null | wc -l)
+          - **JavaScript Files:** $(find dist -name '*.js' 2>/dev/null | wc -l)
+          - **JSON Files:** $(find dist -name '*.json' 2>/dev/null | wc -l)
+
+          ---
+
+          **Commit:** \`${{ github.sha }}\`
+          **Created:** $(date -u +"%Y-%m-%d %H:%M UTC")
+          EOF
+          )"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 9. Build Summary erstellen
+      - name: Create Build Summary
+        run: |
+          echo "## 🎨 Design Token Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Build Successful" >> $GITHUB_STEP_SUMMARY
+          echo "**Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Files Changed:** ${{ steps.changes.outputs.change_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check_pr.outputs.exists }}" == "true" ]; then
+            echo "**Pull Request:** Updated existing PR #${{ steps.check_pr.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Pull Request:** New PR created" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the Pull Request" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check the token changes" >> $GITHUB_STEP_SUMMARY
+          echo "3. Merge the PR to publish package" >> $GITHUB_STEP_SUMMARY
+
+      # 10. Bei Fehler benachrichtigen
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "## ❌ Design Token Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`figma-tokens\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Error Log" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          tail -50 build-output.log 2>/dev/null || echo "No build log available"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

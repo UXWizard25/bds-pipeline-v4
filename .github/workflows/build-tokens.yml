@@ -1,0 +1,269 @@
+name: Build Design Tokens
+
+# Trigger Bedingungen
+on:
+  # Automatischer Trigger bei Push von Source-Tokens
+  push:
+    branches:
+      - main
+      - develop
+      - 'claude/**'
+    paths:
+      - 'src/design-tokens/**'
+      - 'scripts/**'
+      - 'build-config/**'
+      - 'package.json'
+
+  # Manueller Trigger über GitHub UI
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build (delete node_modules and dist)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      commit_outputs:
+        description: 'Commit generated files back to repository'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    name: Build and Process Tokens
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Optional: Clean Build
+      - name: Clean Previous Build
+        if: github.event.inputs.clean_build == 'true'
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf node_modules dist tokens
+
+      # 4. Dependencies installieren
+      - name: Install Dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+
+      # 5. Token-Verarbeitung durchführen
+      - name: Preprocess Figma Tokens
+        run: |
+          echo "⚙️ Preprocessing Figma tokens..."
+          npm run preprocess
+
+      - name: Build Tokens with Style Dictionary
+        id: build
+        run: |
+          echo "🎨 Building tokens with Style Dictionary..."
+          npm run build:tokens 2>&1 | tee build-output.log
+
+          # Extrahiere Build-Statistiken
+          SUCCESSFUL_BUILDS=$(grep -oP 'Builds erfolgreich: \K\d+' build-output.log || echo "0")
+          TOTAL_BUILDS=$(grep -oP 'Builds erfolgreich: \d+/\K\d+' build-output.log || echo "0")
+
+          echo "successful_builds=$SUCCESSFUL_BUILDS" >> $GITHUB_OUTPUT
+          echo "total_builds=$TOTAL_BUILDS" >> $GITHUB_OUTPUT
+
+          if [ "$SUCCESSFUL_BUILDS" -eq "0" ]; then
+            echo "❌ No successful builds!"
+            exit 1
+          fi
+
+      # 6. Build-Artefakte hochladen
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: design-tokens-${{ github.sha }}
+          path: |
+            dist/
+            tokens/
+            build-output.log
+          retention-days: 30
+
+      # 7. Build-Zusammenfassung erstellen
+      - name: Create Build Summary
+        run: |
+          echo "## 🎨 Design Token Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "**Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📁 Generated Files" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Base Layer" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -1 dist/base/*.css 2>/dev/null | head -5 || echo "No files generated"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Mapping Layer" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -1 dist/mapping/*.css 2>/dev/null | head -5 || echo "No files generated"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Density Layer" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -1 dist/density/*.css 2>/dev/null | head -5 || echo "No files generated"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📊 File Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Files Generated:** $(find dist -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **CSS Files:** $(find dist -name '*.css' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SCSS Files:** $(find dist -name '*.scss' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JavaScript Files:** $(find dist -name '*.js' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JSON Files:** $(find dist -name '*.json' | wc -l)" >> $GITHUB_STEP_SUMMARY
+
+      # 8. Comment PR with Artifacts (if this is a PR)
+      - name: Comment PR with Build Artifacts
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Get file statistics
+            const totalFiles = parseInt(require('child_process').execSync('find dist -type f 2>/dev/null | wc -l').toString().trim());
+            const cssFiles = parseInt(require('child_process').execSync('find dist -name "*.css" 2>/dev/null | wc -l').toString().trim());
+            const scssFiles = parseInt(require('child_process').execSync('find dist -name "*.scss" 2>/dev/null | wc -l').toString().trim());
+            const jsFiles = parseInt(require('child_process').execSync('find dist -name "*.js" 2>/dev/null | wc -l').toString().trim());
+            const jsonFiles = parseInt(require('child_process').execSync('find dist -name "*.json" 2>/dev/null | wc -l').toString().trim());
+
+            const comment = `## 🎨 Design Tokens Build erfolgreich!
+
+            **Build Statistiken:**
+            - ✅ Successful Builds: ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}
+            - 📦 Commit: \`${{ github.sha }}\`
+            - 🌲 Branch: \`${{ github.head_ref }}\`
+
+            ### 📥 Review der generierten Files:
+
+            [⬇️ **Download Build Artifacts**](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            **Enthalten:**
+            - \`dist/css/\` - CSS Custom Properties
+            - \`dist/scss/\` - SCSS Variables
+            - \`dist/js/\` - JavaScript ES6
+            - \`dist/json/\` - JSON Data
+            - \`dist/ios/\` - Swift Classes
+            - \`dist/android/\` - Android XML
+            - \`dist/flutter/\` - Flutter Dart
+
+            <details>
+            <summary>📊 Datei-Statistiken</summary>
+
+            - **Total Files:** ${totalFiles}
+            - **CSS Files:** ${cssFiles}
+            - **SCSS Files:** ${scssFiles}
+            - **JS Files:** ${jsFiles}
+            - **JSON Files:** ${jsonFiles}
+
+            </details>
+
+            ---
+
+            💡 **Tipp:** Die Artifacts sind 30 Tage verfügbar.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      # 9. Benachrichtigung bei Fehler
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "## ❌ Design Token Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Error Log" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          tail -50 build-output.log 2>/dev/null || echo "No build log available"
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Release Job (nur bei Tagged Commits)
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: design-tokens-${{ github.sha }}
+          path: ./artifacts
+
+      - name: Create Release Archive
+        run: |
+          cd artifacts/dist
+          zip -r ../../design-tokens-${{ github.ref_name }}.zip .
+          cd ../..
+          tar -czf design-tokens-${{ github.ref_name }}.tar.gz -C artifacts/dist .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            design-tokens-${{ github.ref_name }}.zip
+            design-tokens-${{ github.ref_name }}.tar.gz
+          body: |
+            ## 🎨 Design Tokens Release ${{ github.ref_name }}
+
+            ### Generated Assets
+            - `design-tokens-${{ github.ref_name }}.zip` - All generated token files (ZIP)
+            - `design-tokens-${{ github.ref_name }}.tar.gz` - All generated token files (TAR.GZ)
+
+            ### Contents
+            - Base Layer: Primitive tokens (color, space, size, font)
+            - Mapping Layer: Brand-specific tokens (BILD, SportBILD, Advertorial)
+            - Density Layer: Density variations (compact, default, spacious)
+
+            ### Formats
+            - CSS Custom Properties (with data attributes & :root)
+            - SCSS Variables
+            - JavaScript ES6 Modules
+            - JSON (structured)
+
+            See [README.md](README.md) for usage instructions.

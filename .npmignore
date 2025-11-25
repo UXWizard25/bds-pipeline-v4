@@ -1,0 +1,39 @@
+# Source files (not needed in published package)
+src/
+scripts/
+build-config/
+tokens/
+
+# Development files
+node_modules/
+.git/
+.github/
+.vscode/
+.idea/
+
+# Test and build files
+*.log
+*.test.js
+*.spec.js
+build-test.log
+build-output.log
+
+# Documentation (keep only README.md via "files" in package.json)
+STATUS.md
+QUICKSTART-CI.md
+
+# Config files
+.gitignore
+.editorconfig
+.prettierrc
+.eslintrc
+nodemon.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+.tmp/
+temp/

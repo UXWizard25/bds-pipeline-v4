@@ -1,0 +1,284 @@
+name: Publish to GitHub Packages
+
+# Trigger: Nur bei Git Tags (z.B. v1.0.0, v1.2.3)
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Permissions für GitHub Packages Publishing
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  # Job 1: Build und Test
+  build:
+    name: Build and Test Tokens
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      successful_builds: ${{ steps.build.outputs.successful_builds }}
+      total_builds: ${{ steps.build.outputs.total_builds }}
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Version aus Git Tag extrahieren
+      - name: Get Version from Tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 Version: $VERSION"
+
+      # 3. Node.js Setup
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@uxwizard25'
+          cache: 'npm'
+
+      # 4. Dependencies installieren
+      - name: Install Dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+
+      # 5. Token Build durchführen
+      - name: Build Design Tokens
+        id: build
+        run: |
+          echo "🎨 Building design tokens..."
+          npm run build 2>&1 | tee build-output.log
+
+          # Extrahiere Build-Statistiken
+          SUCCESSFUL_BUILDS=$(grep -oP 'Builds erfolgreich: \K\d+' build-output.log || echo "0")
+          TOTAL_BUILDS=$(grep -oP 'Builds erfolgreich: \d+/\K\d+' build-output.log || echo "0")
+
+          echo "successful_builds=$SUCCESSFUL_BUILDS" >> $GITHUB_OUTPUT
+          echo "total_builds=$TOTAL_BUILDS" >> $GITHUB_OUTPUT
+
+          echo "✅ Successful builds: $SUCCESSFUL_BUILDS/$TOTAL_BUILDS"
+
+          if [ "$SUCCESSFUL_BUILDS" -eq "0" ]; then
+            echo "❌ No successful builds!"
+            exit 1
+          fi
+
+      # 6. Package-Version in package.json synchronisieren
+      - name: Update Package Version
+        run: |
+          echo "📝 Updating package.json version to ${{ steps.get_version.outputs.version }}..."
+          npm version ${{ steps.get_version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      # 7. Package Inhalt validieren
+      - name: Validate Package Contents
+        run: |
+          echo "📋 Validating package contents..."
+          npm pack --dry-run
+
+          echo ""
+          echo "📁 Files that will be published:"
+          npm pack --dry-run 2>&1 | grep -A 100 "npm notice" || true
+
+      # 8. Build Artifacts hochladen für nächsten Job
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts-${{ steps.get_version.outputs.version }}
+          path: |
+            dist/
+            package.json
+            package-lock.json
+            README.md
+            LICENSE
+          retention-days: 30
+
+      # 9. Build Summary erstellen
+      - name: Create Build Summary
+        run: |
+          echo "## 🎨 Design Token Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`v${{ steps.get_version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "**Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Package Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Files:** $(find dist -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **CSS Files:** $(find dist -name '*.css' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SCSS Files:** $(find dist -name '*.scss' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JavaScript Files:** $(find dist -name '*.js' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JSON Files:** $(find dist -name '*.json' | wc -l)" >> $GITHUB_STEP_SUMMARY
+
+  # Job 2: Manuelles Approve & Publish
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: build
+
+    # ⚠️ WICHTIG: Environment mit Protection Rule
+    # Du musst manuell approven, bevor dieser Job läuft
+    environment:
+      name: npm-publish
+      url: https://github.com/${{ github.repository }}/packages
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Node.js Setup für GitHub Packages
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@uxwizard25'
+
+      # 3. Dependencies installieren
+      - name: Install Dependencies
+        run: npm ci
+
+      # 4. Build Artifacts herunterladen
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts-${{ needs.build.outputs.version }}
+
+      # 5. Package veröffentlichen
+      - name: Publish to GitHub Packages
+        run: |
+          echo "📦 Publishing @uxwizard25/design-system-tokens@${{ needs.build.outputs.version }} to GitHub Packages..."
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 6. Success Summary
+      - name: Create Publish Summary
+        run: |
+          echo "## 🚀 Package Published Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** \`@uxwizard25/design-system-tokens\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** GitHub Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Setup .npmrc (once)" >> $GITHUB_STEP_SUMMARY
+          echo "npm config set @uxwizard25:registry https://npm.pkg.github.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Install package" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @uxwizard25/design-system-tokens@${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Package](https://github.com/${{ github.repository }}/packages)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.build.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+
+  # Job 3: GitHub Release erstellen
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, publish]
+
+    permissions:
+      contents: write
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Build Artifacts herunterladen
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts-${{ needs.build.outputs.version }}
+          path: ./artifacts
+
+      # 3. Release Archive erstellen
+      - name: Create Release Archives
+        run: |
+          cd artifacts
+          zip -r ../design-tokens-v${{ needs.build.outputs.version }}.zip dist/
+          tar -czf ../design-tokens-v${{ needs.build.outputs.version }}.tar.gz dist/
+          cd ..
+
+      # 4. Changelog generieren (aus Git Commits seit letztem Tag)
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            CHANGELOG="Initial release"
+          else
+            CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 5. GitHub Release erstellen
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Release v${{ needs.build.outputs.version }}
+          body: |
+            ## 🎨 Design Tokens Release v${{ needs.build.outputs.version }}
+
+            ### 📦 Installation
+
+            ```bash
+            # Setup (once per project)
+            npm config set @uxwizard25:registry https://npm.pkg.github.com
+
+            # Install
+            npm install @uxwizard25/design-system-tokens@${{ needs.build.outputs.version }}
+            ```
+
+            ### ✨ What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### 📊 Build Statistics
+
+            - **Successful Builds:** ${{ needs.build.outputs.successful_builds }}/${{ needs.build.outputs.total_builds }}
+            - **Formats:** CSS, SCSS, JavaScript, JSON
+            - **Brands:** BILD, SportBILD, Advertorial
+            - **Modes:** Light/Dark, Responsive Breakpoints, Density Variations
+
+            ### 📥 Download Assets
+
+            - `design-tokens-v${{ needs.build.outputs.version }}.zip` - All generated token files (ZIP)
+            - `design-tokens-v${{ needs.build.outputs.version }}.tar.gz` - All generated token files (TAR.GZ)
+
+            ### 📖 Documentation
+
+            See [README.md](https://github.com/${{ github.repository }}#readme) for usage instructions.
+          files: |
+            design-tokens-v${{ needs.build.outputs.version }}.zip
+            design-tokens-v${{ needs.build.outputs.version }}.tar.gz
+          draft: false
+          prerelease: false
+
+      # 6. Notify Success
+      - name: Success Notification
+        run: |
+          echo "✅ Release v${{ needs.build.outputs.version }} created successfully!"
+          echo "📦 Package published to GitHub Packages"
+          echo "🏷️  Release notes: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.build.outputs.version }}"

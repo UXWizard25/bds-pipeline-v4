@@ -1,0 +1,62 @@
+{
+  "name": "@marioschmidt/design-system-tokens",
+  "version": "1.0.0",
+  "description": "BILD Design System Token Pipeline with Style Dictionary - Multi-brand design tokens for BILD, SportBILD, and Advertorial",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./css/*": "./dist/css/*",
+    "./scss/*": "./dist/scss/*",
+    "./js/*": "./dist/js/*",
+    "./json/*": "./dist/json/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "preprocess": "node scripts/preprocess-plugin-tokens.js",
+    "build:tokens": "npm run preprocess && node scripts/build-tokens-v2.js",
+    "build": "npm run build:tokens",
+    "watch": "nodemon --watch src/design-tokens --ext json --exec npm run build:tokens",
+    "clean": "rm -rf dist tokens",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UXWizard25/vv-token-test-v3.git"
+  },
+  "bugs": {
+    "url": "https://github.com/UXWizard25/vv-token-test-v3/issues"
+  },
+  "homepage": "https://github.com/UXWizard25/vv-token-test-v3#readme",
+  "keywords": [
+    "design-tokens",
+    "style-dictionary",
+    "figma",
+    "design-system",
+    "bild",
+    "sportbild",
+    "css-variables",
+    "scss",
+    "tokens"
+  ],
+  "author": "UXWizard25",
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "style-dictionary": "^4.2.0",
+    "nodemon": "^3.0.1"
+  },
+  "dependencies": {}
+}

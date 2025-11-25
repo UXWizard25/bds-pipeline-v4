@@ -1,0 +1,250 @@
+name: Publish Package on Merge
+
+# Trigger: Wenn PR zu main gemerged wird
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/design-tokens/**'
+      - 'scripts/**'
+      - 'build-config/**'
+      - 'package.json'
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Build & Publish Package
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repository auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Git konfigurieren für Tagging
+      - name: Configure Git
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+      # 3. Node.js Setup für npmjs.org
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      # 4. Dependencies installieren
+      - name: Install Dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+
+      # 5. Version erhöhen (Patch)
+      - name: Bump Version (Patch)
+        id: version
+        run: |
+          # Hole letzten Git Tag (oder 1.0.0 als default)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          echo "Latest tag: $LATEST_TAG"
+
+          # Entferne 'v' prefix
+          CURRENT_VERSION=${LATEST_TAG#v}
+          echo "Current version: $CURRENT_VERSION"
+
+          # Setze Version in package.json (temporär, nur für Build)
+          npm version $CURRENT_VERSION --no-git-tag-version --allow-same-version
+
+          # Erhöhe Patch-Version
+          npm version patch --no-git-tag-version
+
+          # Neue Version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "New version: $NEW_VERSION"
+
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      # 6. Token Build durchführen
+      - name: Build Design Tokens
+        id: build
+        run: |
+          echo "🎨 Building design tokens..."
+          npm run build 2>&1 | tee build-output.log
+
+          # Extrahiere Build-Statistiken
+          SUCCESSFUL_BUILDS=$(grep -oP 'Builds erfolgreich: \K\d+' build-output.log || echo "0")
+          TOTAL_BUILDS=$(grep -oP 'Builds erfolgreich: \d+/\K\d+' build-output.log || echo "0")
+
+          echo "successful_builds=$SUCCESSFUL_BUILDS" >> $GITHUB_OUTPUT
+          echo "total_builds=$TOTAL_BUILDS" >> $GITHUB_OUTPUT
+
+          if [ "$SUCCESSFUL_BUILDS" -eq "0" ]; then
+            echo "❌ Build failed!"
+            exit 1
+          fi
+
+          echo "✅ Build successful: $SUCCESSFUL_BUILDS/$TOTAL_BUILDS"
+
+      # 7. Package Inhalt validieren
+      - name: Validate Package Contents
+        run: |
+          echo "📋 Validating package contents..."
+          npm pack --dry-run
+
+          echo ""
+          echo "📁 Package will contain:"
+          npm pack --dry-run 2>&1 | grep -E "npm notice.*B " | head -20 || true
+
+      # 8. Package erstellen und Größe ermitteln
+      - name: Create Package and Get Size
+        id: package
+        run: |
+          echo "📦 Creating package..."
+          npm pack
+
+          # Ermittle Package-Größe
+          PACKAGE_FILE=$(ls -t *.tgz | head -1)
+          PACKAGE_SIZE=$(ls -lh "$PACKAGE_FILE" | awk '{print $5}')
+
+          echo "package_file=$PACKAGE_FILE" >> $GITHUB_OUTPUT
+          echo "package_size=$PACKAGE_SIZE" >> $GITHUB_OUTPUT
+          echo "✅ Package: $PACKAGE_FILE ($PACKAGE_SIZE)"
+
+      # 9. Tag erstellen (Version ist nur lokal für Publishing)
+      - name: Create Git Tag
+        run: |
+          TAG_NAME="v${{ steps.version.outputs.new }}"
+
+          # Prüfe ob Tag bereits existiert
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️  Tag $TAG_NAME already exists, skipping tag creation"
+          else
+            git tag "$TAG_NAME"
+            echo "✅ Created tag: $TAG_NAME"
+          fi
+
+      # 10. Push Tag (Version Bump wird nicht committed, nur Tag)
+      - name: Push Tag
+        run: |
+          TAG_NAME="v${{ steps.version.outputs.new }}"
+
+          # Prüfe ob Tag remote existiert
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME$"; then
+            echo "⚠️  Tag $TAG_NAME already exists on remote, skipping push"
+          else
+            git push origin "$TAG_NAME"
+            echo "✅ Pushed tag $TAG_NAME"
+          fi
+
+          echo "ℹ️  Note: Version bump is not committed to main (avoids race conditions)"
+
+      # 11. Package veröffentlichen
+      - name: Publish to npmjs.org
+        run: |
+          echo "📦 Publishing @marioschmidt/design-system-tokens@${{ steps.version.outputs.new }} to npmjs.org..."
+          npm publish
+          echo "✅ Package published successfully!"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 12. Changelog generieren (aus letztem Tag)
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            CHANGELOG="Initial release"
+          else
+            CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges | grep -v "skip ci" || echo "- Token updates")
+          fi
+
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 13. GitHub Release erstellen
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.new }}
+          name: Release v${{ steps.version.outputs.new }}
+          body: |
+            ## 🎨 Design Tokens Release v${{ steps.version.outputs.new }}
+
+            Automated release from Figma token updates.
+
+            ### 📦 Installation
+
+            ```bash
+            npm install @marioschmidt/design-system-tokens@${{ steps.version.outputs.new }}
+            ```
+
+            ### ✨ Changes
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### 📊 Build Statistics
+
+            - **Successful Builds:** ${{ steps.build.outputs.successful_builds }}/${{ steps.build.outputs.total_builds }}
+            - **Package Size:** ${{ steps.package.outputs.package_size }}
+            - **Package File:** `${{ steps.package.outputs.package_file }}`
+            - **Formats:** CSS, SCSS, JavaScript, JSON
+            - **Brands:** BILD, SportBILD, Advertorial
+            - **Modes:** Light/Dark, Responsive Breakpoints, Density Variations
+
+            ### 📖 Documentation
+
+            See [README.md](https://github.com/${{ github.repository }}#readme) for usage instructions.
+
+            ---
+
+            **Previous Version:** v${{ steps.version.outputs.current }}
+            **New Version:** v${{ steps.version.outputs.new }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+
+      # 14. Success Summary
+      - name: Create Publish Summary
+        run: |
+          echo "## 🚀 Package Published Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** \`@marioschmidt/design-system-tokens\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Version:** \`${{ steps.version.outputs.current }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**New Version:** \`${{ steps.version.outputs.new }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** npmjs.org" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @marioschmidt/design-system-tokens@${{ steps.version.outputs.new }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [📦 View on npmjs.org](https://www.npmjs.com/package/@marioschmidt/design-system-tokens)" >> $GITHUB_STEP_SUMMARY
+          echo "- [📋 Release Notes](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.new }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [🎨 Pull Requests](https://github.com/${{ github.repository }}/pulls?q=is%3Apr+is%3Amerged)" >> $GITHUB_STEP_SUMMARY
+
+      # 15. Bei Fehler benachrichtigen
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "## ❌ Package Publishing Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`main\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Intended Version:** \`${{ steps.version.outputs.new }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Error Details" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs for detailed error information." >> $GITHUB_STEP_SUMMARY
