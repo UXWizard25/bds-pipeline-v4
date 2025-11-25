@@ -733,7 +733,8 @@ async function main() {
   console.log(`   └── manifest.json`);
   console.log('');
 
-  process.exit(0);
+  // Let Node.js exit naturally - no process.exit(0) needed
+  // This ensures all file system operations are fully flushed
 }
 
 // Execute
